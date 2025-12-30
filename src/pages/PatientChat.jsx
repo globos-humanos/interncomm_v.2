@@ -11,6 +11,10 @@ const PatientChat = () => {
   const [patient, setPatient] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // editable meta state
+  const [bedInput, setBedInput] = useState('');
+  const [dxInput, setDxInput] = useState('');
+
   const bottomRef = useRef(null);
 
   // ----------------------------------
@@ -43,8 +47,20 @@ const PatientChat = () => {
 
     setPatient(patientData);
 
-    // ✅ Load messages WITH proper sender join
-    const { data: messagesData, error } = await supabase
+    // preload editable values
+    setBedInput(
+      patientData.bed_number ||
+        patientData.bed_number_proposed ||
+        ''
+    );
+    setDxInput(
+      patientData.working_diagnosis ||
+        patientData.working_diagnosis_proposed ||
+        ''
+    );
+
+    // Load messages with sender
+    const { data: messagesData } = await supabase
       .from('messages')
       .select(`
         id,
@@ -61,12 +77,7 @@ const PatientChat = () => {
       .eq('context_id', patientId)
       .order('created_at', { ascending: true });
 
-    if (!error) {
-      setMessages(messagesData || []);
-    } else {
-      console.error(error);
-    }
-
+    setMessages(messagesData || []);
     setLoading(false);
   };
 
@@ -98,6 +109,52 @@ const PatientChat = () => {
     loadData();
   };
 
+  // ----------------------------------
+  // Update patient meta (SOFT approval)
+  // ----------------------------------
+  const updatePatientMeta = async () => {
+    const updates = {};
+
+    if (profile.role === 'INTERN') {
+      updates.bed_number_proposed = bedInput || null;
+      updates.working_diagnosis_proposed = dxInput || null;
+    } else {
+      updates.bed_number = bedInput || null;
+      updates.working_diagnosis = dxInput || null;
+      updates.bed_number_proposed = null;
+      updates.working_diagnosis_proposed = null;
+    }
+
+    const { error } = await supabase
+      .from('patients')
+      .update(updates)
+      .eq('id', patientId);
+
+    if (error) {
+      alert('Failed to update patient details');
+      console.error(error);
+    } else {
+      loadData();
+    }
+  };
+
+  // ----------------------------------
+  // PG confirm proposed values
+  // ----------------------------------
+  const confirmMeta = async () => {
+    const { error } = await supabase
+      .from('patients')
+      .update({
+        bed_number: patient.bed_number_proposed,
+        working_diagnosis: patient.working_diagnosis_proposed,
+        bed_number_proposed: null,
+        working_diagnosis_proposed: null
+      })
+      .eq('id', patientId);
+
+    if (!error) loadData();
+  };
+
   if (loading || !profile || !patient) {
     return <div className="card">Loading…</div>;
   }
@@ -113,20 +170,41 @@ const PatientChat = () => {
       <div className="card" style={{ marginBottom: '12px' }}>
         <strong>{patient.display_name}</strong>
 
-        <div style={{ fontSize: '13px', marginTop: '4px' }}>
-          Bed:{' '}
-          {patient.bed_number ||
-            patient.bed_number_proposed ||
-            '—'}
-          <br />
-          Dx:{' '}
-          {patient.working_diagnosis ||
-            patient.working_diagnosis_proposed ||
-            '—'}
+        <div style={{ fontSize: '13px', marginTop: '6px' }}>
+          <div>
+            Bed:{' '}
+            <input
+              value={bedInput}
+              onChange={(e) => setBedInput(e.target.value)}
+              style={{ width: '120px', marginLeft: '6px' }}
+            />
+          </div>
+
+          <div style={{ marginTop: '6px' }}>
+            Dx:{' '}
+            <input
+              value={dxInput}
+              onChange={(e) => setDxInput(e.target.value)}
+              style={{ width: '200px', marginLeft: '10px' }}
+            />
+          </div>
+        </div>
+
+        <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
+          <button className="secondary" onClick={updatePatientMeta}>
+            Save
+          </button>
+
+          {(profile.role === 'PG' || profile.role === 'SR') &&
+            pendingMeta && (
+              <button className="primary" onClick={confirmMeta}>
+                Confirm updates
+              </button>
+            )}
         </div>
 
         {pendingMeta && (
-          <div style={{ fontSize: '12px', color: '#f5c542', marginTop: '4px' }}>
+          <div style={{ fontSize: '12px', color: '#f5c542', marginTop: '6px' }}>
             Pending PG confirmation
           </div>
         )}
@@ -151,19 +229,11 @@ const PatientChat = () => {
                 marginBottom: '10px'
               }}
             >
-              {/* Sender name */}
-              <div
-                style={{
-                  fontSize: '11px',
-                  color: '#999',
-                  marginBottom: '2px'
-                }}
-              >
+              <div style={{ fontSize: '11px', color: '#999' }}>
                 {msg.sender?.name || 'Unknown'}
                 {msg.sender?.role && ` (${msg.sender.role})`}
               </div>
 
-              {/* Message bubble */}
               <div
                 style={{
                   maxWidth: '80%',
