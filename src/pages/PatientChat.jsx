@@ -8,21 +8,24 @@ const PatientChat = () => {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [profile, setProfile] = useState(null);
+  const [patient, setPatient] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const bottomRef = useRef(null);
 
-  // ----------------------------
-  // Load profile + messages
-  // ----------------------------
-  const loadMessages = async () => {
+  // ----------------------------------
+  // Load profile, patient & messages
+  // ----------------------------------
+  const loadData = async () => {
     setLoading(true);
 
     const { data: sessionData } = await supabase.auth.getSession();
-    if (!sessionData.session) return;
+    const session = sessionData.session;
+    if (!session) return;
 
-    const userId = sessionData.session.user.id;
+    const userId = session.user.id;
 
+    // Load profile
     const { data: profileData } = await supabase
       .from('profiles')
       .select('*')
@@ -31,31 +34,53 @@ const PatientChat = () => {
 
     setProfile(profileData);
 
+    // Load patient
+    const { data: patientData } = await supabase
+      .from('patients')
+      .select('*')
+      .eq('id', patientId)
+      .single();
+
+    setPatient(patientData);
+
+    // ✅ Load messages WITH proper sender join
     const { data: messagesData, error } = await supabase
       .from('messages')
-      .select('*')
+      .select(`
+        id,
+        content,
+        sender_id,
+        created_at,
+        sender:profiles (
+          id,
+          name,
+          role
+        )
+      `)
       .eq('context_type', 'PATIENT')
       .eq('context_id', patientId)
       .order('created_at', { ascending: true });
 
     if (!error) {
       setMessages(messagesData || []);
+    } else {
+      console.error(error);
     }
 
     setLoading(false);
   };
 
   useEffect(() => {
-    loadMessages();
+    loadData();
   }, [patientId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // ----------------------------
+  // ----------------------------------
   // Send message
-  // ----------------------------
+  // ----------------------------------
   const sendMessage = async () => {
     if (!newMessage.trim()) return;
 
@@ -70,15 +95,43 @@ const PatientChat = () => {
     });
 
     setNewMessage('');
-    loadMessages();
+    loadData();
   };
 
-  if (loading || !profile) {
+  if (loading || !profile || !patient) {
     return <div className="card">Loading…</div>;
   }
 
+  const pendingMeta =
+    patient.bed_number_proposed ||
+    patient.working_diagnosis_proposed;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+
+      {/* Patient header */}
+      <div className="card" style={{ marginBottom: '12px' }}>
+        <strong>{patient.display_name}</strong>
+
+        <div style={{ fontSize: '13px', marginTop: '4px' }}>
+          Bed:{' '}
+          {patient.bed_number ||
+            patient.bed_number_proposed ||
+            '—'}
+          <br />
+          Dx:{' '}
+          {patient.working_diagnosis ||
+            patient.working_diagnosis_proposed ||
+            '—'}
+        </div>
+
+        {pendingMeta && (
+          <div style={{ fontSize: '12px', color: '#f5c542', marginTop: '4px' }}>
+            Pending PG confirmation
+          </div>
+        )}
+      </div>
+
       {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', marginBottom: '12px' }}>
         {messages.length === 0 && (
@@ -93,10 +146,24 @@ const PatientChat = () => {
               key={msg.id}
               style={{
                 display: 'flex',
-                justifyContent: isMine ? 'flex-end' : 'flex-start',
-                marginBottom: '8px'
+                flexDirection: 'column',
+                alignItems: isMine ? 'flex-end' : 'flex-start',
+                marginBottom: '10px'
               }}
             >
+              {/* Sender name */}
+              <div
+                style={{
+                  fontSize: '11px',
+                  color: '#999',
+                  marginBottom: '2px'
+                }}
+              >
+                {msg.sender?.name || 'Unknown'}
+                {msg.sender?.role && ` (${msg.sender.role})`}
+              </div>
+
+              {/* Message bubble */}
               <div
                 style={{
                   maxWidth: '80%',
@@ -111,6 +178,7 @@ const PatientChat = () => {
             </div>
           );
         })}
+
         <div ref={bottomRef} />
       </div>
 
